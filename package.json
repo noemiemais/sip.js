@@ -1,9 +1,10 @@
 {
   "name": "sip",
-  "description": "Simple SIP implementation",
-  "version": "0.0.2-13",
-  "homepage": "http://github.com/kirm/sip.js",
+  "description": "Simple SIP implementation with some bugfixes, and websocket transport",
+  "version": "0.1",
+  "homepage": "https://github.com/markwebster/sip.js",
   "author": "Kirill Mikhailov <kirill.mikhailov@gmail.com>",
+  "contributors": [ { "name": "Mark Webster", "email": "mark.webster@gmail.com" } ],
   "main": "sip",
   "directories": {
     "lib": "",
@@ -12,9 +13,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/kirm/sip.js.git"
+    "url": "https://github.com/markwebster/sip.js.git"
   },
   "engines": {
     "node": ">=0.2.2"
+  },
+  "dependencies" : {
+	"faye-websocket" : "*"
   }
 }

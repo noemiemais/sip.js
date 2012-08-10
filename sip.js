@@ -4,122 +4,10 @@ var dns = require('dns');
 var assert = require('assert');
 var dgram = require('dgram');
 
-var v05 = !(process.version < 'v0.5.0');
+var HTTP = require('http');
+var WebSock = require('faye-websocket');
 
 //Various utility stuff
-
-if(!v05) {
-//node.js 'dgram' module do not allow proper ICMP errors handling
-var udp = (function() {
-  var events = require('events');
-
-  try {
-    var IOWatcher    = process.binding('io_watcher').IOWatcher;
-  } 
-  catch(e) {
-    var IOWatcher    = process.IOWatcher;
-  }
-  var binding      = process.binding('net');
-  var socket       = binding.socket;
-  var recvfrom     = binding.recvfrom;
-  var close        = binding.close;
-
-  var pool = null;
-
-  function getPool() {
-    var minPoolAvail = 1024 * 8;
-
-    var poolSize = 1024 * 64;
-
-    if (pool === null || (pool.used + minPoolAvail  > pool.length)) {
-      pool = new Buffer(poolSize);
-      pool.used = 0;
-    }
-
-    return pool;
-  }
-
-  function Socket(listener) {
-    events.EventEmitter.call(this);
-    var self = this;
-    self.fd = socket('udp4');
-
-    if(typeof listener === 'function')
-      self.on('message', listener);
-
-    self.watcher = new IOWatcher();
-    self.watcher.host = self;
-    self.watcher.callback = function() {
-      try {
-        while(self.fd) {
-          var p = getPool();
-          var rinfo = recvfrom(self.fd, p, p.used, p.length-p.used, 0);
-       
-          if(!rinfo) return;
-
-          self.emit('message', p.slice(p.used, p.used + rinfo.size), rinfo);
-
-          p.used += rinfo.size;
-        }
-      }
-      catch(e) {
-        self.emit('error', e);
-      } 
-    };
-
-    self.watcher.set(this.fd, true, false); 
-    self.watcher.start(); 
-  }
-
-  util.inherits(Socket, events.EventEmitter); 
-
-  Socket.prototype.bind = function(port, address) {
-    binding.bind(this.fd, port, address);
-    this.emit('listening');
-  }
-
-  Socket.prototype.connect = function(port, address) {
-    binding.connect(this.fd, port, address);
-  }
-
-  Socket.prototype.address = function () {
-    return binding.getsockname(this.fd);
-  };
-
-  Socket.prototype.send = function(buffer, offset, length, callback) {
-    if (typeof offset !== "number" || typeof length !== "number") {
-      throw new Error("send takes offset and length as args 2 and 3");
-    }
-
-    try {
-      var bytes = binding.sendMsg(this.fd, buffer, offset, length);
-    }
-    catch(err) {
-      if (callback) {
-        callback(err);
-      }
-      return;
-    }
- 
-    if(callback) {
-      callback(null, bytes);
-    }
-  };
-
-  Socket.prototype.close = function () {
-    if (!this.fd) throw new Error('Not running');
-
-    this.watcher.stop();
-
-    close(this.fd);
-    this.fd = null;
-
-    this.emit("close");
-  };
-
-  return { createSocket: function(listener) { return new Socket(listener); } };
-})();
-}
 
 function debug(e) {
   if(e.stack) {
@@ -171,7 +59,8 @@ function parseParams(data, hdr) {
   var re = /\s*;\s*([\w\-.!%*_+`'~]+)(?:\s*=\s*([\w\-.!%*_+`'~]+|"[^"\\]*(\\.[^"\\]*)*"))?/g; 
   
   for(var r = applyRegex(re, data); r; r = applyRegex(re, data)) {
-    hdr.params[r[1].toLowerCase()] = r[2];
+    //hdr.params[r[1].toLowerCase()] = r[2];
+    hdr.params[r[1]] = r[2];
   }
 
   return hdr;
@@ -197,7 +86,12 @@ function parseAOR(data) {
 
   return parseParams(data, {name: r[1], uri: r[2] || r[3]});
 }
-exports.parseAOR = parseAOR;
+exports.parseAOR = function(data) {
+	var r=parseAOR({s:data, i:0});
+	if (r&&r.uri) r.uri=parseUri(r.uri);
+	return r;
+}
+
 
 function parseVia(data) {
   var r = applyRegex(/SIP\s*\/\s*(\d+\.\d+)\s*\/\s*([\S]+)\s+([^\s;:]+)(?:\s*:\s*(\d+))?/g, data);
@@ -301,7 +195,7 @@ function parseUri(s) {
   if(typeof s === 'object')
     return s;
 
-  var re = /^(sips?):(?:([^\s>:@]+)(?::([^\s@>]+))?@)?([\w\-\.]+)(?::(\d+))?((?:;[^\s=\?>;]+(?:=[^\s?\;]+)?)*)(\?([^\s&=>]+=[^\s&=>]+)(&[^\s&=>]+=[^\s&=>]+)*)?$/;
+  var re = /^([^:]+):(?:([^\s>:@]+)(?::([^\s@>]+))?@)?([\w\-\.]+)(?::(\d+))?((?:;[^\s=\?>;]+(?:=[^\s?\;]+)?)*)(\?([^\s&=>]+=[^\s&=>]+)(&[^\s&=>]+=[^\s&=>]+)*)?$/;
 
   var r = re.exec(s);
 
@@ -369,8 +263,10 @@ function stringifyParams(params) {
 }
 
 function stringifyAOR(aor) {
-  return (aor.name || '') + ' <' + stringifyUri(aor.uri) + '>'+stringifyParams(aor.params); 
+  if (!aor) return '';
+  return (aor.name || '') + '<' + stringifyUri(aor.uri) + '>'+stringifyParams(aor.params); 
 }
+exports.stringifyAOR = stringifyAOR;
 
 function stringifyAuthHeader(a) {
   var s = [];
@@ -437,7 +333,7 @@ function stringify(m) {
     s = m.method + ' ' + stringifyUri(m.uri) + ' SIP/' + stringifyVersion(m.version) + '\r\n';
   }
 
-  m.headers['content-length'] = (m.content || '').length;
+//  m.headers['content-length'] = (m.content || '').length;
 
   for(var n in m.headers) {
     if(typeof m.headers[n] === 'string' || !stringifiers[n]) 
@@ -543,23 +439,109 @@ exports.makeStreamParser = makeStreamParser;
 
 function parseMessage(s) {
   var r = s.toString('ascii').split('\r\n\r\n');
-  if(r) {
-    var m = parse(r[0]);
+  if (!r) return false;
+  var m = parse(r[0]);
+  if (!m) return false;
 
-    if(m) {
-      if(m.headers['content-length']) {
-        var c = Math.max(0, Math.min(m.headers['content-length'], r[1].length));
-        m.content = r[1].substring(0, c);
-      }
-      else {
-        m.content = r[1];
-      }
-      
-      return m;
-    }
+  if(m.headers['content-length']) {
+  var c = Math.max(0, Math.min(m.headers['content-length'], r[1].length));
+    m.content = r[1].substring(0, c);
   }
+  else {
+    m.content = r[1];
+  }
+      
+  return m;
 }
 exports.parse = parseMessage;
+
+function makeWsTransport(options, callback) {
+	var connections = Object.create(null);
+
+	function init(ws, remote) {
+		var stream = ws._stream;
+		var id = [remote.address, remote.port].join(),
+			local = {protocol: 'WS', address: stream.address().address, port: stream.address().port},
+			pending = [],
+			refs = 0;
+
+		function send(m) {
+			if (typeof m=="object") {
+				if(m.method) {
+					m.headers.via[0].host = local.address;
+					m.headers.via[0].port = options.port;
+					m.headers.via[0].protocol = local.protocol;
+				}
+				options.logger && options.logger.send && options.logger.send(m, target);
+				m = stringify(m);
+			}
+			try {
+//				if(stream.readyState === 'opening')
+//					pending.push(m);
+//				else
+					ws.send(m);
+			}
+			catch(e) {
+				process.nextTick(stream.emit.bind(stream, 'error', e));
+			}
+		}
+
+//		stream.setEncoding('ascii');
+
+		var parser = makeStreamParser(function(m) { 
+			if(m.method) m.headers.via[0].params.received = remote.address;
+			callback(m, remote); 
+		});
+		ws.onmessage = function(event) { return parser(event.data); }
+
+		ws.onclose = function() { delete connections[id]; }
+//		ws.onerror = function() {};
+//		stream.on('end',      function() { if(refs === 0) ws.close(); });
+		stream.on('timeout',  function() { if(refs === 0) ws.close(); });
+//		http.on('connect',  function() { pending.splice(0).forEach(send); });
+		stream.setTimeout(60000);   
+
+		connections[id] = function(onError) {
+			++refs;
+			if (typeof onError == 'function') ws.onerror = onError;
+
+			return {
+				release	: function() {
+					if (onError) ws.onerror = null;
+					if(--refs <= 0) ws.close();
+				},
+				send	: send,
+				local	: local
+			}
+		};
+
+		return connections[id];
+	}
+
+	var http = HTTP.createServer(function(req,res) {
+	});
+	http.on('error', function(err) {
+		console.error('sip.js HTTP server: '+err);
+	});
+	http.on('upgrade', function(req, sock, head) {
+		var ws = new WebSock(req, sock, head, ['sip']);
+		if (!ws || !ws._stream) return;
+		var stream = ws._stream;
+    	init(ws, {protocol: 'WS', address: stream.remoteAddress, port: stream.remotePort});
+	});
+
+	http.listen(options.port || 5060, options.address);
+
+	return {
+		open: function(remote, error, dontopen) {
+				var id = [remote.address, remote.port].join();
+				if (id in connections) return connections[id](error);
+				// We can't make outbound websocket connections yet
+				return null;
+		},
+		destroy: function() { http.close(); }
+	}
+}
 
 function makeTcpTransport(options, callback) {
   var connections = Object.create(null);
@@ -571,6 +553,15 @@ function makeTcpTransport(options, callback) {
         refs = 0;
 
     function send(m) {
+      if (typeof m=="object") {
+        if(m.method) {
+          m.headers.via[0].host = local.address;
+          m.headers.via[0].port = options.port;
+          m.headers.via[0].protocol = local.protocol;
+        }
+        options.logger && options.logger.send && options.logger.send(m, target);
+        m = new Buffer(stringify(m), 'ascii');	// TODO: ascii conversions everywhere - speed?
+      }
       try {
         if(stream.readyState === 'opening')
           pending.push(m);
@@ -639,109 +630,59 @@ function makeTcpTransport(options, callback) {
   }
 }
 
-function makeUdpTransport_V0_5(options, callback) {
+function makeUdpTransport(options, callback) {
   function onMessage(data, rinfo) {
     var msg = parseMessage(data);
-    
-    if(msg) {
-      if(msg.method) {
-        msg.headers.via[0].params.received = rinfo.address;
-        if(msg.headers.via[0].params.hasOwnProperty('rport'))
-          msg.headers.via[0].params.rport = rinfo.port;
-      }
+    if (!msg) return;
 
-      callback(msg, {protocol: 'UDP', address: rinfo.address, port: rinfo.port});
+	if(msg.method) {
+      msg.headers.via[0].params.received = rinfo.address;
+      if(msg.headers.via[0].params.hasOwnProperty('rport'))
+        msg.headers.via[0].params.rport = rinfo.port;
     }
+    callback(msg, {protocol: 'UDP', address: rinfo.address, port: rinfo.port});
   }
 
   var socket = dgram.createSocket(net.isIPv6(options.address) ? 'udp6' : 'udp4', onMessage); 
-  socket.bind(options.port || 5060, options.address);
-
-  return {
-    open: function(remote, error) {
-      return {
-        send: function(m) {
-          socket.send(new Buffer(m, 'ascii'), 0, m.length, remote.port, remote.address);          
-        },
-        local: {protocol: 'UDP', address: socket.address().address, port: socket.address().port},
-        release : function() {}
-      }; 
-    },
-    destroy: function() { socket.close(); }
-  }
-}
-
-function makeUdpTransport_pre_V0_5(options, callback) {
-  var connections = Object.create(null);
-
-  function listener(data, rinfo) {
-    var msg = parseMessage(data);
-
-    if(msg) {
-      if(msg.method) {
-        msg.headers.via[0].params.received = rinfo.address;
-        if(msg.headers.via[0].params.hasOwnProperty('rport'))
-          msg.headers.via[0].params.rport = rinfo.port;
-      }
-    
-      callback(msg, {protocol: 'UDP', address: rinfo.address, port: rinfo.port});
-    }
-  };
-
-  var socket = udp.createSocket(listener);
-
-  socket.bind(options.port || 5060, options.address);
   socket.on('error', function() {});
-  
-  function open(remote) {
-    var socket = udp.createSocket(listener),
-        id = [remote.address, remote.port].join(),
-        local,
-        refs = 0,
-        timeout;
-    
+  if (socket.setSndBuf) {
+	// I've added a bunch of socket options to my build of node.js, sorry
+    socket.setSndBuf(1024*1024);
+    socket.setRcvBuf(1024*1024);
+  }
+
+  try {
     socket.bind(options.port || 5060, options.address);
-    socket.connect(remote.port, remote.address);
-    
-    local = {protocol: 'UDP', address: socket.address().address, port: socket.address().port};
-    
-    socket.on('error', function() {});
-    socket.on('close', function() { delete connections[id]; });
+  } catch (e) {
+    return false;
+  }
 
-    return connections[id] = function(onError) {
-      ++refs;
-      
-      if(timeout) {
-        clearTimeout(timeout);
-        timeout = null;
-      }
-
-      if(onError) socket.on('error', onError);
-
-      return { 
-        send: function(m) {
-          socket.send(new Buffer(m, 'ascii'), 0, m.length);
-        },
-        release: function() { 
-          if(onError) socket.removeListener('error', onError);
-          
-          if(--refs === 0)
-            timeout = setTimeout(socket.close.bind(socket), 30000);
-        },
-        local: local
-      };
-    };
-  };
+  var local = {protocol: 'UDP', address: socket.address().address, port: socket.address().port};
  
   return {
     open: function(remote, error) { 
-      return (connections[[remote.address, remote.port].join()] || open(remote))(error);
-    },
-    destroy: function() { socket.close(); }
+      function cb(err) { if (err) error(err); }
+      return {
+        send: function(m) {
+				if (!socket) return;
+                if (typeof m=="object") {
+                  if(m.method) {
+                    m.headers.via[0].host = this.local.address;
+                    m.headers.via[0].port = options.port;
+                    m.headers.via[0].protocol = this.local.protocol;
+                  }
+                  options.logger && options.logger.send && options.logger.send(m, target);
+                  m = new Buffer(stringify(m), 'ascii');
+                }
+                socket.send(m, 0, m.length, remote.port, remote.address, cb);
+              },
+        release: function() {},
+        local: local,
+      }
+	},
+    destroy: function() { if (socket) socket.close(); socket=false; },
   };
 }
-
-var makeUdpTransport = v05 ? makeUdpTransport_V0_5 : makeUdpTransport_pre_V0_5; 
 
 function makeTransport(options, callback) {
   var protocols = {};
@@ -754,43 +695,25 @@ function makeTransport(options, callback) {
     }
   }
   
-  if(options.udp === undefined || options.udp)
-    protocols.UDP = makeUdpTransport(options, callbackAndLog); 
+  if (!options.port) options.port = 5060;
+
+  if(options.udp === undefined || options.udp) {
+    if (!(protocols.UDP = makeUdpTransport(options, callbackAndLog)))
+      return false;
+  }
   if(options.tcp === undefined || options.tcp)
     protocols.TCP = makeTcpTransport(options, callbackAndLog);
-
-  function wrap(obj, target) {
-    return Object.create(obj, {send: {value: function(m) {
-      if(m.method) {
-        m.headers.via[0].host = this.local.address;
-        m.headers.via[0].port = options.port || 5060;
-        m.headers.via[0].protocol = this.local.protocol;
-
-        try {
-        if(this.local.protocol === 'UDP' && (!options.hasOwnProperty('rport') || options.rport)) {
-          m.headers.via[0].params.rport = null;
-        }
-        } catch(e) {
-          util.debug(e);
-        }
-      }
-      options.logger && options.logger.send && options.logger.send(m, target);
-      obj.send(stringify(m));
-    }}});
-  }
+  if(options.ws)
+	protocols.WS = makeWsTransport(options, callbackAndLog);
 
   return {
     open: function(target, error) {
-      return wrap(protocols[target.protocol.toUpperCase()].open(target, error), target);
+      return protocols[target.protocol.toUpperCase()].open(target, error);
     },
     send: function(target, message) {
       var cn = this.open(target);
-      try {
-        cn.send(message);
-      }
-      finally {
-        cn.release();
-      }
+      cn.send(message);
+      cn.release();
     },
     destroy: function() { 
       Object.keys(protocols).forEach(function(key) { protocols[key].destroy(); });
@@ -804,6 +727,13 @@ function resolve(uri, action) {
   if(net.isIP(uri.host))
     return action([{protocol: uri.params.transport || 'UDP', address: uri.host, port: uri.port || 5060}]);
 
+  var protocols = uri.params.protocol ? [uri.params.protocol] : ['UDP', 'TCP'];
+  dns.resolve4(uri.host, function(err, address) {
+    address = (address || []).map(function(x) { return protocols.map(function(p) { return { protocol: p, address: x, port: uri.port || 5060};});})
+      .reduce(function(arr,v) { return arr.concat(v); }, []);
+    action(address);
+  });
+/* // TODO re-enable this stuff
   function resolve46(host, cb) {
     dns.resolve4(host, function(e4, a4) {
       dns.resolve6(host, function(e6, a6) {
@@ -855,6 +785,7 @@ function resolve(uri, action) {
       })
     });
   }
+*/
 }
 
 exports.resolve = resolve;
@@ -983,9 +914,9 @@ function createInviteClientTransaction(rq, transport, tu, cleanup) {
       }
         
       b = setTimeout(function() {
-        tu(makeResponse(rq, 503));
+        tu(makeResponse(rq, 408, 'Request timeout'));
         sm.enter(terminated);
-      }, 32000);
+      }, 2000);
     },
     leave: function() {
       clearTimeout(a);
@@ -997,7 +928,7 @@ function createInviteClientTransaction(rq, transport, tu, cleanup) {
       if(message.status < 200)
         sm.enter(proceeding);
       else if(message.status < 300) 
-         sm.enter(accepted);
+        sm.enter(accepted, message);
       else
         sm.enter(completed, message);
     }
@@ -1010,7 +941,7 @@ function createInviteClientTransaction(rq, transport, tu, cleanup) {
       if(message.status >= 300)
         sm.enter(completed, message);
       else if(message.status >= 200)
-        sm.enter(accepted);
+        sm.enter(accepted, message);
     }
   };
 
@@ -1037,7 +968,9 @@ function createInviteClientTransaction(rq, transport, tu, cleanup) {
   };
 
   var accepted = {
-    enter: function() {
+    enter: function(rs) {
+      ack.headers.to=rs.headers.to;
+      transport(ack);
       setTimeout(function() { sm.enter(terminated); }, 32000);
     },
     message: function(m) {
@@ -1075,7 +1008,7 @@ function createClientTransaction(rq, transport, tu, cleanup) {
         sm.enter(completed);
       else
         sm.enter(proceeding);
-      tu(message);
+      tu(message);	// XXX this used to be before sm.enter()
     },
     timerE: function(t) {
       transport(rq);
@@ -1087,7 +1020,7 @@ function createClientTransaction(rq, transport, tu, cleanup) {
     }
   };
 
-  var proceeding = {
+  var proceeding = { // XXX this used to be proceeding = trying;
     message: function(message, remote) {
       if(message.status >= 200)
         sm.enter(completed);
@@ -1117,11 +1050,7 @@ function makeTransactionLayer(options, transport) {
   return {
     createServerTransaction: function(rq, remote) {
       var id = makeTransactionId(rq);
-      
-      if(remote.protocol === 'UDP' && !rq.headers.via[0].params.hasOwnProperty('rport'))
-        remote = {protocol: 'UDP', port: rq.headers.via[0].port || 5060, address: remote.address};
-
-      var cn = transport(remote, function() {}, true);
+      var cn = transport.open(remote, function() {}, true);
       return server_transactions[id] = (rq.method === 'INVITE' ? createInviteServerTransaction : createServerTransaction)(
         cn.send.bind(cn),
         function() { 
@@ -1135,11 +1064,9 @@ function makeTransactionLayer(options, transport) {
           rq.headers.via.unshift({params:{}});
         else
           rq.headers.via = [{params:{}}];
+        rq.headers.via[0].params.branch = generateBranch();
       }
       
-      if(typeof rq.headers.cseq !== 'object')
-        rq.headers.cseq = parseCSeq({s: rq.headers.cseq, i:0});
-
       var transaction = rq.method === 'INVITE' ? createInviteClientTransaction : createClientTransaction;
 
       var hop = parseUri(rq.uri);
@@ -1163,12 +1090,10 @@ function makeTransactionLayer(options, transport) {
           onresponse = searching;
           if(address.length > 0) {
             try {
-              if(rq.method !== 'CANCEL')
-                rq.headers.via[0].params.branch = generateBranch();
  
               var id = makeTransactionId(rq);
 
-              var cn = transport(address.shift(), function(e) { client_transactions[id].message(makeResponse(rq, 503));}); 
+              var cn = transport.open(address.shift(), function(e) { client_transactions[id].message(makeResponse(rq, 503));}); 
               var send = cn.send.bind(cn);
               send.reliable = cn.local.protocol.toUpperCase() !== 'UDP';
 
@@ -1178,6 +1103,8 @@ function makeTransactionLayer(options, transport) {
               });
             }
             catch(e) {
+              var errorLog = (options.logger && options.logger.error) || function(e) { console.error(e); };
+              errorLog("Caught exception: "+e.stack); 
               onresponse(makeResponse(rq, 503));  
             }
           }
@@ -1209,8 +1136,6 @@ function makeTransactionLayer(options, transport) {
 exports.makeTransactionLayer = makeTransactionLayer;
 
 exports.create = function(options, callback) {
-  var errorLog = (options.logger && options.logger.error) || function() {};
-
   var transport = makeTransport(options, function(m,remote) {
     try {
       var t = m.method ? transaction.getServer(m) : transaction.getClient(m);
@@ -1234,13 +1159,17 @@ exports.create = function(options, callback) {
       }
     } 
     catch(e) {
-      errorLog(e);
+      var errorLog = (options.logger && options.logger.error) || function(e) { console.error(e); };
+      errorLog("Caught exception: "+e.stack); 
     }
   });
-  
-  var transaction = makeTransactionLayer(options, transport.open.bind(transport));
+  if (!transport) return false;
+
+  var transaction = makeTransactionLayer(options, transport);
 
   return {
+	address: options.address || '0.0.0.0',
+	port: options.port || 5060,
     send: function(m, callback) {
       if(m.method === undefined) {
         var t = transaction.getServer(m);
@@ -1248,8 +1177,7 @@ exports.create = function(options, callback) {
       }
       else {
         if(m.method === 'ACK') {
-          if(m.headers.via === undefined)
-            m.headers.via = [];
+          if(!m.headers.via) m.headers.via = [];
 
           m.headers.via.unshift({params: {branch: generateBranch()}});
           
@@ -1258,17 +1186,7 @@ exports.create = function(options, callback) {
               errorLog(new Error("ACK: couldn't resove" + stringifyUri(m.uri)));
               return;
             }
-          
-            var cn = transport.open(address[0], errorLog);
-            try {
-              cn.send(m);
-            } 
-            catch(e) {
-              errorLog(e);
-            }
-            finally {
-              cn.release();
-            }
+            transport.send(m, address[0]);
           });
         }
         else {
@@ -1282,8 +1200,10 @@ exports.create = function(options, callback) {
 
 exports.start = function(options, callback) {
   var r = exports.create(options, callback);
+  if (!r) return false;
 
   exports.send = r.send;
   exports.stop = r.destroy;
+  return r;
 }
 

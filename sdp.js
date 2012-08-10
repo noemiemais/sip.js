@@ -74,7 +74,7 @@ exports.parse = function(sdp) {
 
   result.m.forEach(function(m) {
     if(m.c)
-      m.c = parseC(result.c);
+      m.c = parseC(m.c);
   });
 
   return result;
