@@ -466,6 +466,7 @@ function makeWsTransport(options, callback) {
 			refs = 0;
 
 		function send(m) {
+//			if (stream.readyState === 'opening') return pending.push(m);
 			if (typeof m=="object") {
 				if(m.method) {
 					m.headers.via[0].host = local.address;
@@ -476,10 +477,7 @@ function makeWsTransport(options, callback) {
 				m = stringify(m);
 			}
 			try {
-//				if(stream.readyState === 'opening')
-//					pending.push(m);
-//				else
-					ws.send(m);
+				ws.send(m);
 			}
 			catch(e) {
 				process.nextTick(stream.emit.bind(stream, 'error', e));
@@ -548,11 +546,17 @@ function makeTcpTransport(options, callback) {
 
   function init(stream, remote) {
     var id = [remote.address, remote.port].join(),
-        local = {protocol: 'TCP', address: stream.address().address, port: stream.address().port},
+        local = {protocol: 'TCP'},
         pending = [],
         refs = 0;
 
     function send(m) {
+      if (stream.readyState === 'opening') return pending.push(m);
+	  if (!local.address) {
+		local.address = stream.address().address;
+	    local.port = stream.address().port;
+	  }
+
       if (typeof m=="object") {
         if(m.method) {
           m.headers.via[0].host = local.address;
@@ -563,22 +567,20 @@ function makeTcpTransport(options, callback) {
         m = new Buffer(stringify(m), 'ascii');	// TODO: ascii conversions everywhere - speed?
       }
       try {
-        if(stream.readyState === 'opening')
-          pending.push(m);
-        else
-          stream.write(m, 'ascii');
-      }
-      catch(e) {
+	  	//console.log("TCP SEND: "+m.toString());
+        stream.write(m, 'ascii');
+      } catch(e) {
         process.nextTick(stream.emit.bind(stream, 'error', e));
       }
     }
     
     stream.setEncoding('ascii');
 
-    stream.on('data', makeStreamParser(function(m) { 
+	var parse = makeStreamParser(function(m) { 
       if(m.method) m.headers.via[0].params.received = remote.address;
       callback(m, remote); 
-    }));
+    });
+    stream.on('data', function(data) { /*console.log("TCP RECV: "+data);*/ parse(data); });
 
     stream.on('close',    function() { delete connections[id]; });
     stream.on('error',    function() {});
@@ -616,18 +618,16 @@ function makeTcpTransport(options, callback) {
 
   server.listen(options.port || 5060, options.address);
 
-  return {
+  var transport = {
     open: function(remote, error, dontopen) {
       var id = [remote.address, remote.port].join();
-
-      if(id in connections) return connections[id](error);
-
-      if(dontopen) return null;
-
+      if (id in connections) return connections[id](error);
+      if (dontopen) return null;
       return init(net.createConnection(remote.port, remote.address), remote)(error);
     },
     destroy: function() { server.close(); }
   }
+  return transport;
 }
 
 function makeUdpTransport(options, callback) {
@@ -674,6 +674,7 @@ function makeUdpTransport(options, callback) {
                   options.logger && options.logger.send && options.logger.send(m, target);
                   m = new Buffer(stringify(m), 'ascii');
                 }
+	  			//console.log("UDP SEND: "+m.toString());
                 socket.send(m, 0, m.length, remote.port, remote.address, cb);
               },
         release: function() {},
@@ -701,7 +702,7 @@ function makeTransport(options, callback) {
     if (!(protocols.UDP = makeUdpTransport(options, callbackAndLog)))
       return false;
   }
-  if(options.tcp === undefined || options.tcp)
+  if (!options.ws && (options.tcp === undefined || options.tcp))
     protocols.TCP = makeTcpTransport(options, callbackAndLog);
   if(options.ws)
 	protocols.WS = makeWsTransport(options, callbackAndLog);
@@ -916,7 +917,7 @@ function createInviteClientTransaction(rq, transport, tu, cleanup) {
       b = setTimeout(function() {
         tu(makeResponse(rq, 408, 'Request timeout'));
         sm.enter(terminated);
-      }, 2000);
+      }, 2000); // Yes, very short.
     },
     leave: function() {
       clearTimeout(a);

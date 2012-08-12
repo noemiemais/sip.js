@@ -1,5 +1,5 @@
-var sip = require('sip');
-var WSProxy = require('sip/websocket-proxy');
+var sip = require('sipws');
+var WSProxy = require('sipws/websocket-proxy');
 
 // Where to listen for WebSocket connections
 var websocket = {address:'0.0.0.0', port:5062};
@@ -7,7 +7,7 @@ var websocket = {address:'0.0.0.0', port:5062};
 var sipbind = {address:'0.0.0.0', port:5060};
 
 // Create SIP transport
-var trans = sip.create({ws:false, tcp:false, udp:true, address:sipbind.address, port:sipbind.port},
+var trans = sip.create({tcp:true, udp:true, address:sipbind.address, port:sipbind.port},
 		handler);
 
 // Create WebSocket proxy
@@ -28,6 +28,9 @@ function route(proxy, req, rem) {
 	var client = 'WS://'+rem.address+':'+rem.port;
 	console.log('Client request ['+req.method+' '+req.uri+'] from '+client);
 //	req.uri = req.headers.contact[0].uri;
+
+	/* Uncomment next line to force TCP */
+//	req.uri += ';transport=tcp';
 	proxy.send(sip.makeResponse(req, 100, 'Trying'));
 
 	trans.send(req, function(res) {

@@ -3,15 +3,15 @@ INTRO
 
 sip.js is a SIP stack for node.js. It implements tranaction and transport layers as described in RFC3261. 
 
-This fork fixes a few bugs, and adds WebSocket transport (so we now have 'tcp', 'udp', and 'ws').
-It also uses a single UDP socket per transport instead of creating a new one per client dialog.
+This fork fixes a few bugs, and adds WebSocket transport (giving us 'tcp', 'udp', and 'ws').
+It also uses a single UDP socket per transport instead of creating one per client dialog.
 
 Things are a bit messy. Sorry!
 
 
 INSTALL
 -------
-Just copy the whole directory into node_modules/sip/
+npm install sipws
 
 
 API

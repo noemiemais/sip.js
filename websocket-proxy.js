@@ -1,4 +1,3 @@
-var util= require('util');
 var sip	= require('./sip.js');
 
 var contexts = {};
