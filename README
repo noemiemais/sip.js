@@ -17,3 +17,29 @@ npm install sipws
 API
 ---
 API is documented in doc/api.markdown
+
+
+WEBSOCKET -> SIP PROXY
+----------------------
+websocket-proxy.js contains a very basic proxy implementation.
+examples/websocket.js shows an example of its use.
+
+Initially, this was written to provide a proxy for sipML5 (by Doubango Telecom). I have been
+attempting to support interoperability with FreeSWITCH. Although I can successfully REGISTER
+a sipML5 client, it attempts a bundled audio & video INVITE even when video is disabled, and
+I am unable to support this on my FreeSWITCH instance.
+
+There are a few other issues with this:
+1) SIP INVITEs can get really big, forcing you to use TCP transport
+2) However, when you have "auth-calls"="true" in your FreeSWITCH SIP profile, sipML5 seems
+   to send a dodgy 2nd SIP INVITE (the one containing the auth credentials) which is then
+   rejected.
+3) Furthermore, sipML5 (or WebRTC?) breaks standards in sending a=crypto in RTP/AVP, but
+   thankfully Anthony M. has added an NDLB ("No Device Left Behind") option to support this:
+   http://wiki.freeswitch.org/index.php?title=NDLB&redirect=no#NDLB-allow-crypto-in-avp
+
+If anybody manages to get further than I did, please let me know. And I am more than willing
+to accept pull requests & patches.
+
+-MDW
+

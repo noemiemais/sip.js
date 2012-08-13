@@ -1,7 +1,7 @@
 {
   "name": "sipws",
-  "description": "Simple SIP impl. with WebSocket transport and some bugfixes",
-  "version": "0.1.1",
+  "description": "Simple SIP impl. with WebSocket transport",
+  "version": "0.1.1-2",
   "homepage": "https://github.com/markwebster/sip.js",
   "author": "Kirill Mikhailov <kirill.mikhailov@gmail.com>",
   "contributors": [ { "name": "Mark Webster", "email": "mark.webster@gmail.com" } ],
@@ -22,6 +22,6 @@
 	"faye-websocket" : "*"
   },
   "keywords" : [
-	"websocket", "sip", "sipml5", "webrtc"
+	"websocket", "sip", "sipml5", "webrtc", "proxy"
   ]
 }
