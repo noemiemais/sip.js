@@ -15,7 +15,7 @@ Example
 
 Redirecting all SIP requests to backup.somewhere.net
 
-    var sip = require('sip');
+    var sip = require('sipws');
   
     sip.start({}, function(request) {
       var response = sip.makeResponse(request, 302, 'Moved Temporarily');
@@ -102,7 +102,7 @@ Starts SIP protocol.
 
 `options` - an object optionally containing following properties. 
 
-* `port` - port to be used by trasport. 5060 by default.
+* `port` - port to be used by transport. 5060 by default.
 * `address` - interface address to be listen on. By default sip.js listens on all interfaces.
 * `udp` - enables UDP transport. Enabled by default.
 * `tcp` - enables TCP transport. Enabled by default.
